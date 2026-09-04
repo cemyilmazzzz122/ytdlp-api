@@ -120,6 +120,8 @@ const ytdlp = new YtDlp(undefined, {
   rateLimit: '2M',                 // cap bandwidth at 2MB/s
   concurrentFragments: 4,          // parallel fragment downloads
   ffmpegLocation: '/usr/bin',
+  impersonate: 'chrome',           // spoof a browser's TLS/HTTP fingerprint
+  extractorArgs: ['youtube:player_client=web,ios'],
 });
 ```
 
@@ -180,6 +182,109 @@ import ytdlp from 'ytdlp-api';
 const videos = await ytdlp.getChannel(playlistUrl, { flat: false });
 ```
 
+### 11. Resolving Direct Stream URLs
+
+Skip the download entirely and get the raw, playable media URL(s) — useful for proxying or handing off to a media player.
+
+```typescript
+import ytdlp from 'ytdlp-api';
+
+const urls = await ytdlp.getDirectUrl(url, { args: ['-f', 'best'] });
+console.log(urls[0]); // https://...
+```
+
+### 12. Fast, Field-Only Metadata
+
+`getFields` skips the full `--dump-json` extraction and only prints the fields you ask for — much faster when scraping metadata for many URLs.
+
+```typescript
+import ytdlp from 'ytdlp-api';
+
+const { title, duration, view_count } = await ytdlp.getFields(url, ['title', 'duration', 'view_count']);
+```
+
+### 13. Typed Errors
+
+Failures are classified into specific error subclasses so callers can branch on *why* yt-dlp failed instead of parsing stderr themselves.
+
+```typescript
+import ytdlp, { PrivateVideoError, GeoRestrictedError, AgeRestrictedError, VideoUnavailableError, NetworkError } from 'ytdlp-api';
+
+try {
+  await ytdlp.getVideoInfo(url);
+} catch (err) {
+  if (err instanceof PrivateVideoError) {
+    // skip and move on
+  } else if (err instanceof NetworkError) {
+    // retry later
+  }
+  throw err;
+}
+```
+
+### 14. Watching a Channel for New Uploads
+
+Polls a channel or playlist and calls `onNewVideo` only for videos published after the watch started.
+
+```typescript
+import ytdlp from 'ytdlp-api';
+
+const stop = ytdlp.watchChannel(
+  'https://www.youtube.com/@SomeChannel/videos',
+  (video) => console.log('New upload:', video.title),
+  { intervalMs: 5 * 60_000 }
+);
+
+// later, to stop polling:
+stop();
+```
+
+### 15. Batch Scraping with Bounded Concurrency
+
+Fetches metadata for many URLs at once without spawning unlimited processes or hammering the target site. Each URL resolves independently — one failure doesn't sink the batch.
+
+```typescript
+import ytdlp from 'ytdlp-api';
+
+const results = await ytdlp.batchGetVideoInfo(urls, { concurrency: 3, delayMs: 250 });
+
+for (const r of results) {
+  if (r.status === 'fulfilled') console.log(r.url, r.value.title);
+  else console.warn(r.url, r.reason.message);
+}
+```
+
+### 16. Fetching Comments
+
+```typescript
+import ytdlp from 'ytdlp-api';
+
+const comments = await ytdlp.getComments(url, { args: ['--extractor-args', 'youtube:max_comments=50'] });
+```
+
+### 17. Searching Other Sites
+
+`search` defaults to YouTube (`ytsearch`) but accepts any search-extractor prefix yt-dlp supports.
+
+```typescript
+import ytdlp from 'ytdlp-api';
+
+const results = await ytdlp.search('lofi beats', 5, { engine: 'ytsearch' });
+```
+
+### 18. Anti-Bot Fingerprinting and Extractor Args
+
+For sites that need browser impersonation or extractor-specific tuning (e.g. YouTube PO tokens), set these on `GlobalOptions`.
+
+```typescript
+import { YtDlp } from 'ytdlp-api';
+
+const ytdlp = new YtDlp(undefined, {
+  impersonate: 'chrome',
+  extractorArgs: ['youtube:player_client=web,ios'],
+});
+```
+
 ## API Reference
 
 - `new YtDlp(binaryPath?: string, globalOptions?: GlobalOptions)`
@@ -209,11 +314,26 @@ const videos = await ytdlp.getChannel(playlistUrl, { flat: false });
 - `ytdlp.downloadSubtitles(url: string, outputDir: string, langs?: string[], options?: YtDlpOptions): Promise<string[]>`
   Downloads subtitle/auto-caption files and returns their paths.
 
-- `ytdlp.search(query: string, limit?: number, options?: YtDlpOptions): Promise<VideoInfo[]>`
-  Searches YouTube and returns a list of matching entries.
+- `ytdlp.search(query: string, limit?: number, options?: SearchOptions): Promise<VideoInfo[]>`
+  Searches a site's search extractor (YouTube by default) and returns a list of matching entries.
 
 - `ytdlp.getChannel(url: string, options?: ChannelOptions): Promise<VideoInfo[]>`
   Fetches a list of video entries from a specific channel or playlist URL.
+
+- `ytdlp.getDirectUrl(url: string, options?: YtDlpOptions): Promise<string[]>`
+  Resolves the direct, playable stream URL(s) for a video without downloading it.
+
+- `ytdlp.getFields(url: string, fields: string[], options?: YtDlpOptions): Promise<Record<string, string>>`
+  Fetches only the requested metadata fields — faster than a full `getVideoInfo` call.
+
+- `ytdlp.getComments(url: string, options?: YtDlpOptions): Promise<Comment[]>`
+  Fetches comments for a video, when the site's extractor supports it.
+
+- `ytdlp.batchGetVideoInfo(urls: string[], options?: BatchOptions): Promise<BatchResult<VideoInfo>[]>`
+  Fetches metadata for many URLs with bounded concurrency; each URL resolves independently as fulfilled or rejected.
+
+- `ytdlp.watchChannel(url: string, onNewVideo: (video: VideoInfo) => void, options?: WatchChannelOptions): () => void`
+  Polls a channel/playlist and invokes `onNewVideo` for videos published after the watch started. Returns a `stop` function.
 
 - `ytdlp.execJson<T>(args: string[], signal?: AbortSignal): Promise<T[]>`
   Executes `yt-dlp` with arbitrary arguments and parses the standard output as JSON objects.
