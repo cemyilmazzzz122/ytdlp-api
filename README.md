@@ -107,25 +107,119 @@ async function searchYoutube() {
 }
 ```
 
+### 5. Global Options (cookies, proxy, rate limiting)
+
+Pass a second argument to the `YtDlp` constructor to apply options to every call automatically — no need to repeat them via `args` each time.
+
+```typescript
+import { YtDlp } from 'ytdlp-api';
+
+const ytdlp = new YtDlp(undefined, {
+  cookies: './cookies.txt',        // or: cookiesFromBrowser: 'chrome'
+  proxy: 'socks5://127.0.0.1:1080',
+  rateLimit: '2M',                 // cap bandwidth at 2MB/s
+  concurrentFragments: 4,          // parallel fragment downloads
+  ffmpegLocation: '/usr/bin',
+});
+```
+
+### 6. Extracting Audio
+
+A convenience wrapper around `download` for the common "just give me an mp3" case.
+
+```typescript
+import ytdlp from 'ytdlp-api';
+
+await ytdlp.extractAudio(
+  'https://www.youtube.com/watch?v=dQw4w9WgXcQ',
+  (progress) => console.log(`${progress.percent}% (${progress.status})`),
+  { format: 'mp3', outputTemplate: '%(title)s.%(ext)s' }
+);
+```
+
+### 7. Thumbnails and Subtitles
+
+Fetch a thumbnail or subtitle files without downloading the video/audio itself.
+
+```typescript
+import ytdlp from 'ytdlp-api';
+
+const thumbPath = await ytdlp.downloadThumbnail(url, './out');
+const subtitlePaths = await ytdlp.downloadSubtitles(url, './out', ['en', 'tr']);
+```
+
+### 8. Listing Formats
+
+```typescript
+import ytdlp from 'ytdlp-api';
+
+const formats = await ytdlp.getFormats(url);
+const best1080p = formats.find(f => f.height === 1080);
+```
+
+### 9. Cancelling In-Flight Requests
+
+Every method that spawns `yt-dlp` accepts an `AbortSignal` via `options.signal` (or as the second argument to `execJson`/`exec`).
+
+```typescript
+import ytdlp from 'ytdlp-api';
+
+const controller = new AbortController();
+setTimeout(() => controller.abort(), 5000);
+
+await ytdlp.download(url, onProgress, { args: ['-f', 'best'], signal: controller.signal });
+```
+
+### 10. Full Playlist Metadata
+
+`getChannel` uses `--flat-playlist` by default for speed. Pass `{ flat: false }` to fetch full metadata (including `formats`) for every entry.
+
+```typescript
+import ytdlp from 'ytdlp-api';
+
+const videos = await ytdlp.getChannel(playlistUrl, { flat: false });
+```
+
 ## API Reference
+
+- `new YtDlp(binaryPath?: string, globalOptions?: GlobalOptions)`
+  Creates a wrapper instance. `globalOptions` (cookies, proxy, rate limiting, etc.) apply to every call made through it.
 
 - `ytdlp.update(): Promise<string>`
   Updates the bundled `yt-dlp` binary to its latest release from the official repository.
 
+- `ytdlp.version(): Promise<string>`
+  Returns the version string of the underlying `yt-dlp` binary.
+
 - `ytdlp.getVideoInfo(url: string, options?: YtDlpOptions): Promise<VideoInfo>`
   Fetches detailed metadata for a single video entity.
 
+- `ytdlp.getFormats(url: string, options?: YtDlpOptions): Promise<Format[]>`
+  Fetches the list of available formats for a video.
+
 - `ytdlp.download(url: string, onProgress?: (progress: DownloadProgress) => void, options?: YtDlpOptions): Promise<void>`
-  Downloads the video or audio payload and emits continuous progress events.
+  Downloads the video or audio payload and emits continuous progress events, including playlist index/count when downloading a playlist.
+
+- `ytdlp.extractAudio(url: string, onProgress?: (progress: DownloadProgress) => void, options?: ExtractAudioOptions): Promise<void>`
+  Downloads and transcodes audio only.
+
+- `ytdlp.downloadThumbnail(url: string, outputDir: string, options?: YtDlpOptions): Promise<string>`
+  Downloads just the thumbnail image and returns its path.
+
+- `ytdlp.downloadSubtitles(url: string, outputDir: string, langs?: string[], options?: YtDlpOptions): Promise<string[]>`
+  Downloads subtitle/auto-caption files and returns their paths.
 
 - `ytdlp.search(query: string, limit?: number, options?: YtDlpOptions): Promise<VideoInfo[]>`
   Searches YouTube and returns a list of matching entries.
 
-- `ytdlp.getChannel(url: string, options?: YtDlpOptions): Promise<VideoInfo[]>`
+- `ytdlp.getChannel(url: string, options?: ChannelOptions): Promise<VideoInfo[]>`
   Fetches a list of video entries from a specific channel or playlist URL.
 
-- `ytdlp.execJson<T>(args: string[]): Promise<T[]>`
+- `ytdlp.execJson<T>(args: string[], signal?: AbortSignal): Promise<T[]>`
   Executes `yt-dlp` with arbitrary arguments and parses the standard output as JSON objects.
+
+- `ytdlp.exec(args: string[], signal?: AbortSignal): Promise<string>`
+  Executes `yt-dlp` with arbitrary arguments and returns raw stdout.
 
 ## License
 
