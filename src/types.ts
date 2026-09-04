@@ -53,6 +53,13 @@ export interface GlobalOptions {
   ffmpegLocation?: string;
   /** Never download playlists, only the given video (`--no-playlist`). */
   noPlaylist?: boolean;
+  /** Impersonate a browser's TLS/HTTP fingerprint, e.g. 'chrome' (`--impersonate`). */
+  impersonate?: string;
+  /**
+   * Extractor-specific arguments, each in `KEY:ARGS` form
+   * (`--extractor-args`), e.g. `['youtube:player_client=web,ios']`.
+   */
+  extractorArgs?: string[];
 }
 
 export interface Thumbnail {
@@ -122,6 +129,7 @@ export interface VideoInfo {
   subtitles?: Record<string, any[]>;
   automatic_captions?: Record<string, any[]>;
   chapters?: any[];
+  comments?: Comment[];
   [key: string]: any; // Catch-all for other properties returned by yt-dlp
 }
 
@@ -133,6 +141,51 @@ export interface ChannelInfo {
   entries?: VideoInfo[];
   [key: string]: any;
 }
+
+export interface SearchOptions extends YtDlpOptions {
+  /**
+   * Search engine prefix yt-dlp understands, e.g. 'ytsearch' (default),
+   * 'ytsearchdate', or another site's search extractor prefix.
+   */
+  engine?: string;
+}
+
+export interface Comment {
+  id: string;
+  text: string;
+  author: string;
+  author_id?: string;
+  author_is_uploader?: boolean;
+  timestamp?: number;
+  like_count?: number;
+  is_favorited?: boolean;
+  /** 'root' for top-level comments, otherwise the parent comment's id. */
+  parent?: string;
+  [key: string]: any;
+}
+
+export interface WatchChannelOptions {
+  /** Milliseconds between polls. Defaults to 5 minutes. */
+  intervalMs?: number;
+  /** Stops the watch loop when aborted. */
+  signal?: AbortSignal;
+  /** Called when a poll fails; the loop keeps running unless `signal` aborts. */
+  onError?: (error: Error) => void;
+  /** Passed through to the underlying `getChannel` calls. */
+  args?: string[];
+}
+
+export interface BatchOptions {
+  /** Maximum number of yt-dlp processes running at once. Defaults to 3. */
+  concurrency?: number;
+  /** Delay in milliseconds a worker waits before picking up its next url. */
+  delayMs?: number;
+  signal?: AbortSignal;
+}
+
+export type BatchResult<T> =
+  | { url: string; status: 'fulfilled'; value: T }
+  | { url: string; status: 'rejected'; reason: Error };
 
 export interface DownloadProgress {
   percent: number;

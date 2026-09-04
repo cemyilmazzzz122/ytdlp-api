@@ -9,7 +9,13 @@ import {
   GlobalOptions,
   DownloadProgress,
   Format,
+  SearchOptions,
+  Comment,
+  WatchChannelOptions,
+  BatchOptions,
+  BatchResult,
 } from './types';
+import { classifyError } from './errors';
 
 const binaryName = os.platform() === 'win32' ? 'yt-dlp.exe' : 'yt-dlp';
 const defaultBinaryPath = path.join(__dirname, '..', 'bin', binaryName);
@@ -40,6 +46,10 @@ export class YtDlp {
     if (g.concurrentFragments) args.push('-N', String(g.concurrentFragments));
     if (g.ffmpegLocation) args.push('--ffmpeg-location', g.ffmpegLocation);
     if (g.noPlaylist) args.push('--no-playlist');
+    if (g.impersonate) args.push('--impersonate', g.impersonate);
+    if (g.extractorArgs) {
+      for (const ea of g.extractorArgs) args.push('--extractor-args', ea);
+    }
 
     return args;
   }
@@ -81,7 +91,7 @@ export class YtDlp {
         if (signal?.aborted) {
           reject(new Error('yt-dlp process aborted'));
         } else if (code !== 0) {
-          reject(new Error(`yt-dlp exited with code ${code}\nStderr: ${stderr}`));
+          reject(classifyError(stderr, code));
         } else {
           resolve(stdout);
         }
@@ -159,14 +169,174 @@ export class YtDlp {
   }
 
   /**
-   * Searches YouTube and returns a list of results.
+   * Searches a site's search extractor and returns a list of results.
+   * Defaults to YouTube (`ytsearch`); pass `{ engine: 'soundcloudsearch' }`
+   * (or any other yt-dlp search-extractor prefix) to search elsewhere.
    */
-  public async search(query: string, limit: number = 10, options?: YtDlpOptions): Promise<VideoInfo[]> {
-    const args = [`ytsearch${limit}:${query}`, '--flat-playlist'];
+  public async search(query: string, limit: number = 10, options?: SearchOptions): Promise<VideoInfo[]> {
+    const engine = options?.engine || 'ytsearch';
+    const args = [`${engine}${limit}:${query}`, '--flat-playlist'];
     if (options?.args) {
       args.push(...options.args);
     }
     return this.execJson<VideoInfo>(args, options?.signal);
+  }
+
+  /**
+   * Resolves the direct, playable media URL(s) for a video without
+   * downloading it (`yt-dlp -g`). Returns one URL per requested stream —
+   * usually one, or two when video and audio are served separately.
+   */
+  public async getDirectUrl(url: string, options?: YtDlpOptions): Promise<string[]> {
+    const args = [url, '-g'];
+    if (options?.args) {
+      args.push(...options.args);
+    }
+    const output = await this.exec(args, options?.signal);
+    return output.trim().split('\n').filter(line => line.length > 0);
+  }
+
+  /**
+   * Fetches a small set of metadata fields via `--print`, avoiding the cost
+   * of a full `--dump-json` extraction. `fields` are `VideoInfo` keys, e.g.
+   * `['title', 'duration', 'view_count']`.
+   */
+  public async getFields(
+    url: string,
+    fields: string[],
+    options?: YtDlpOptions
+  ): Promise<Record<string, string>> {
+    const args = [url, '--skip-download'];
+    for (const field of fields) {
+      args.push('--print', `%(${field})s`);
+    }
+    if (options?.args) {
+      args.push(...options.args);
+    }
+    const output = await this.exec(args, options?.signal);
+    const lines = output.trim().split('\n');
+    const result: Record<string, string> = {};
+    fields.forEach((field, i) => {
+      result[field] = lines[i] ?? '';
+    });
+    return result;
+  }
+
+  /**
+   * Fetches comments for a video (`--write-comments`). Requires the site's
+   * extractor to support comment extraction.
+   */
+  public async getComments(url: string, options?: YtDlpOptions): Promise<Comment[]> {
+    const args = [url, '--write-comments', '--skip-download'];
+    if (options?.args) {
+      args.push(...options.args);
+    }
+    const results = await this.execJson<VideoInfo>(args, options?.signal);
+    return results[0]?.comments ?? [];
+  }
+
+  /**
+   * Runs `getVideoInfo` over many URLs with bounded concurrency, so a large
+   * scrape doesn't spawn hundreds of processes at once or hammer the target
+   * site. Failures for individual URLs don't abort the batch — each result
+   * reports its own fulfilled/rejected outcome.
+   */
+  public async batchGetVideoInfo(urls: string[], options?: BatchOptions): Promise<BatchResult<VideoInfo>[]> {
+    return this.runBatch(urls, (url, signal) => this.getVideoInfo(url, { signal }), options);
+  }
+
+  private async runBatch<T>(
+    urls: string[],
+    task: (url: string, signal?: AbortSignal) => Promise<T>,
+    options?: BatchOptions
+  ): Promise<BatchResult<T>[]> {
+    const concurrency = Math.max(1, options?.concurrency ?? 3);
+    const delayMs = options?.delayMs ?? 0;
+    const results: BatchResult<T>[] = new Array(urls.length);
+    let nextIndex = 0;
+
+    const worker = async () => {
+      while (nextIndex < urls.length) {
+        if (options?.signal?.aborted) return;
+        const i = nextIndex++;
+        const url = urls[i];
+        try {
+          const value = await task(url, options?.signal);
+          results[i] = { url, status: 'fulfilled', value };
+        } catch (err) {
+          results[i] = { url, status: 'rejected', reason: err as Error };
+        }
+        if (delayMs > 0 && nextIndex < urls.length) {
+          await new Promise(resolve => setTimeout(resolve, delayMs));
+        }
+      }
+    };
+
+    const workerCount = Math.min(concurrency, urls.length);
+    await Promise.all(Array.from({ length: workerCount }, worker));
+    return results;
+  }
+
+  /**
+   * Polls a channel or playlist for newly published videos and invokes
+   * `onNewVideo` for each one. The first poll only establishes the known
+   * baseline (no callbacks fire for pre-existing videos). Returns a `stop`
+   * function; polling also stops if `options.signal` aborts.
+   */
+  public watchChannel(
+    url: string,
+    onNewVideo: (video: VideoInfo) => void,
+    options?: WatchChannelOptions
+  ): () => void {
+    const intervalMs = options?.intervalMs ?? 5 * 60_000;
+    const seen = new Set<string>();
+    let initialized = false;
+    let stopped = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+
+    const stop = () => {
+      if (stopped) return;
+      stopped = true;
+      if (timer) clearTimeout(timer);
+    };
+
+    const poll = async () => {
+      if (stopped) return;
+      try {
+        const entries = await this.getChannel(url, {
+          flat: true,
+          args: options?.args,
+          signal: options?.signal,
+        });
+        if (!initialized) {
+          for (const entry of entries) seen.add(entry.id);
+          initialized = true;
+        } else {
+          for (const entry of entries) {
+            if (!seen.has(entry.id)) {
+              seen.add(entry.id);
+              onNewVideo(entry);
+            }
+          }
+        }
+      } catch (err) {
+        options?.onError?.(err as Error);
+      }
+      if (!stopped) {
+        timer = setTimeout(poll, intervalMs);
+      }
+    };
+
+    if (options?.signal) {
+      if (options.signal.aborted) {
+        stop();
+        return stop;
+      }
+      options.signal.addEventListener('abort', stop, { once: true });
+    }
+
+    void poll();
+    return stop;
   }
 
   /**
@@ -327,7 +497,7 @@ export class YtDlp {
         if (options?.signal?.aborted) {
           reject(new Error('Download aborted'));
         } else if (code !== 0) {
-          reject(new Error(`yt-dlp exited with code ${code}\nStderr: ${stderr}`));
+          reject(classifyError(stderr, code));
         } else {
           resolve();
         }
