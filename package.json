@@ -1,0 +1,39 @@
+{
+  "name": "ytdlp-api",
+  "version": "1.0.1",
+  "description": "A powerful yt-dlp wrapper for Node.js to fetch YouTube channels, search results, and more.",
+  "main": "./dist/index.js",
+  "module": "./dist/index.mjs",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.mjs",
+      "require": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsup src/index.ts --format cjs,esm --dts --clean --shims",
+    "dev": "tsup src/index.ts --format cjs,esm --dts --watch --shims",
+    "postinstall": "node scripts/install-yt-dlp.js",
+    "prepublishOnly": "npm run build",
+    "test": "vitest run"
+  },
+  "keywords": [
+    "youtube",
+    "yt-dlp",
+    "api",
+    "search",
+    "channel",
+    "wrapper"
+  ],
+  "author": "Cem",
+  "license": "MIT",
+  "devDependencies": {
+    "@types/node": "^20.12.7",
+    "tsup": "^8.0.2",
+    "typescript": "^5.4.5",
+    "vitest": "^1.6.0"
+  },
+  "dependencies": {}
+}
