@@ -3,6 +3,56 @@ export interface YtDlpOptions {
    * Additional arguments to pass to yt-dlp.
    */
   args?: string[];
+  /**
+   * Abort the underlying yt-dlp process when this signal fires.
+   */
+  signal?: AbortSignal;
+}
+
+export interface ChannelOptions extends YtDlpOptions {
+  /**
+   * When true (default), uses `--flat-playlist` for a fast listing with
+   * partial metadata. Set to false to fetch full metadata (including
+   * `formats`) for every entry, at the cost of one extra request per video.
+   */
+  flat?: boolean;
+}
+
+export type AudioFormat = 'mp3' | 'm4a' | 'opus' | 'wav' | 'flac' | 'aac' | 'vorbis' | 'alac' | 'best';
+
+export interface ExtractAudioOptions extends YtDlpOptions {
+  /**
+   * Target audio codec/container. Defaults to 'mp3'.
+   */
+  format?: AudioFormat;
+  /**
+   * Output filename template, e.g. '%(title)s.%(ext)s'. Passed via `-o`.
+   */
+  outputTemplate?: string;
+}
+
+/**
+ * Options applied to every yt-dlp invocation made by a `YtDlp` instance.
+ * Useful for authentication, network, and performance tuning that would
+ * otherwise need to be repeated via `args` on every call.
+ */
+export interface GlobalOptions {
+  /** Path to a Netscape-format cookies file (`--cookies`). */
+  cookies?: string;
+  /** Load cookies from a local browser, e.g. 'chrome', 'firefox' (`--cookies-from-browser`). */
+  cookiesFromBrowser?: string;
+  /** Proxy URL, e.g. 'socks5://127.0.0.1:1080' (`--proxy`). */
+  proxy?: string;
+  /** Custom User-Agent header (`--user-agent`). */
+  userAgent?: string;
+  /** Maximum download rate, e.g. '5M', '500K' (`-r`/`--limit-rate`). */
+  rateLimit?: string;
+  /** Number of fragments to download concurrently (`-N`/`--concurrent-fragments`). */
+  concurrentFragments?: number;
+  /** Path to the ffmpeg/ffprobe binaries directory (`--ffmpeg-location`). */
+  ffmpegLocation?: string;
+  /** Never download playlists, only the given video (`--no-playlist`). */
+  noPlaylist?: boolean;
 }
 
 export interface Thumbnail {
@@ -90,4 +140,12 @@ export interface DownloadProgress {
   downloadedSize?: string;
   speed: string;
   eta: string;
+  /** Current lifecycle stage of this download event. */
+  status?: 'downloading' | 'finished' | 'already-downloaded';
+  /** Destination path yt-dlp reported for the file currently being written. */
+  filename?: string;
+  /** 1-based index of the current entry, when downloading a playlist. */
+  playlistIndex?: number;
+  /** Total number of entries in the playlist being downloaded. */
+  playlistCount?: number;
 }
